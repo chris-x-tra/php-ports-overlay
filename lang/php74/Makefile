@@ -1,6 +1,6 @@
 PORTNAME=	php74
 DISTVERSION=	7.4.33
-PORTREVISION?=	0
+PORTREVISION?=	1
 CATEGORIES?=	lang devel www
 MASTER_SITES=	PHP
 DISTNAME=	php-${DISTVERSION}
@@ -12,8 +12,8 @@ WWW=		https://www.php.net/
 
 LICENSE=	PHP301
 
-DEPRECATED=Upstream Security Support ends on 2022-11-28
-EXPIRATION_DATE=2022-11-29
+#DEPRECATED=Upstream Security Support ends on 2022-11-28
+#EXPIRATION_DATE=2022-11-29
 
 USES+=		compiler:c11 tar:xz cpe gnome pkgconfig
 CPE_PRODUCT=	php
