@@ -161,6 +161,8 @@ USES+=		ssl
 .endif
 
 .if ${PHP_MODNAME} == "intl"
+USES+=		compiler:c++17-lang
+USE_CXXSTD=	gnu++17
 CONFIGURE_ARGS+=--with-intl=${LOCALBASE}
 LIB_DEPENDS=	libicui18n.so:devel/icu
 USES+=		pkgconfig
