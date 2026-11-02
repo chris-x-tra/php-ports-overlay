@@ -1,41 +1,45 @@
 #!/bin/sh
-# sync-ports.sh - baut TARGET (= /usr/ports.php74) aus Upstream-FreeBSD-Ports + eigenem Overlay (PHP 7.4)
-# sync-ports.sh - baut TARGET (= /usr/ports.php56) aus Upstream-FreeBSD-Ports + eigenem Overlay (PHP 5.6)
+# sync-ports.sh - builds a ports tree (TARGET) for a legacy PHP jail from the current
+#                 upstream FreeBSD ports tree plus our own overlay repository.
+#                 Used for:  php74jail -> TARGET .../ports.php74   (no profile needed)
+#                            php5jail  -> TARGET .../ports.php56   (PROFILE=php56)
 #
-# Regel: In TARGET wird NIE von Hand editiert. Aenderungen gehen ins Overlay-Repo,
-# TARGET wird bei jedem Lauf neu aus Upstream + Overlay erzeugt.
+# Rule: NEVER edit TARGET by hand. Changes go into the overlay repo; TARGET is
+# regenerated from upstream + overlay on every run.
 #
-# Overlay-Repo (Layout wie ein Ports-Tree):
-#   lang/php74/ ...   archivers/php74-zlib/ ...   (alle php74-Ports)
-#   patch-php-mk.sh   fuegt PHP 7.4 in den jeweils AKTUELLEN Upstream-Mk/Uses/php.mk ein
-#   profiles/NAME/    (optional) Ports nur fuer ein Profil, z.B. profiles/php56/databases/pecl-memcache
-#                     (alte 5.6-Version, die eine neuere Upstream-Version ueberschreibt).
-#                     Aktivierung: PROFILE=php56 sync-ports.sh
-#   OVERRIDES         (optional) Upstream-Dateien, die das Overlay als ganze Kopie ueberschreibt
-#   UPSTREAM_BASE     Upstream-Commit, auf dem diese Kopien beruhen (Drift-Warnung)
+# Overlay repo layout (same as a ports tree):
+#   lang/php74/ ...   archivers/php74-zlib/ ...   (all php74 / php56 ports)
+#   patch-php-mk.sh   inserts PHP 7.4 / 5.6 into the CURRENT upstream Mk/Uses/php.mk
+#   profiles/NAME/    (optional) ports for one profile only, e.g.
+#                     profiles/php56/databases/pecl-memcache (old 5.6-era version that
+#                     replaces a newer upstream version). Enable with PROFILE=NAME.
+#   OVERRIDES         (optional) upstream files that the overlay replaces as a whole copy
+#   UPSTREAM_BASE     upstream commit the overlay copies are based on (drift warning)
 #
-# Benoetigt: pkg install git rsync
+# Requires: pkg install git rsync
 #
-# --> Ablauf:
-# cd /usr/ports/
-# git pull
-# cd /usr/local/src/php-ports-overlay
-# Aufruf:  sync-ports.sh            # normaler Lauf
-#          PROFILE=php56 TARGET=/usr/jails/php56jail/usr/ports.php56/ sync-ports.sh   # (Tree fuer das php5-Jail)
-#          PROFILE=php74 TARGET=/usr/jails/php74jail/usr/ports.php74/ sync-ports.sh   # (Tree fuer das php7-Jail)
-#          sync-ports.sh --accept   # danach UPSTREAM_BASE auf aktuellen Upstream-Stand setzen
+# Usage (TARGET is mandatory; there is deliberately no default, to avoid syncing
+# into the wrong jail):
+#   cd /usr/local/src/php-ports-overlay
+#   PROFILE=php56 TARGET=/usr/jails/php56jail/usr/ports.php56/ ./sync-ports.sh   # tree for the php5 jail
+#   TARGET=/usr/jails/php74jail/usr/ports.php74/ ./sync-ports.sh                 # tree for the php7 jail
+#   ./sync-ports.sh --accept   # (with TARGET) afterwards: record current upstream commit as UPSTREAM_BASE
+#
+# Environment: UPSTREAM (default /usr/ports), OVERLAY, TARGET, PROFILE, BRANCH, SUNSETS
 
 set -eu
 
 UPSTREAM=${UPSTREAM:-/usr/ports}
-OVERLAY=${OVERLAY:-/usr/local/src/php-ports-overlay/}
-TARGET=${TARGET:-/usr/jails/php56jail/usr/ports.php56/
-#TARGET=${TARGET:-/usr/jails/php74jail/usr/ports.php74/
-PROFILE=${PROFILE:-}           # leer = nur gemeinsamer Teil; php56 = zusaetzlich profiles/php56
-BRANCH=${BRANCH:-main}         # oder z.B. 2026Q4 (Quartalszweig, weniger Aenderungen)
+OVERLAY=${OVERLAY:-/usr/local/src/php-ports-overlay}
+TARGET=${TARGET:-}
+PROFILE=${PROFILE:-}           # empty = common part only; php56 = additionally profiles/php56
+BRANCH=${BRANCH:-main}         # or e.g. 2026Q4 (quarterly branch, fewer changes)
 
-[ -d "$UPSTREAM/.git" ] || { echo "FEHLER: $UPSTREAM ist kein Git-Klon" >&2; exit 1; }
-[ -d "$OVERLAY/.git" ]  || { echo "FEHLER: $OVERLAY ist kein Git-Klon" >&2; exit 1; }
+[ -n "$TARGET" ] || { echo "ERROR: TARGET is not set (e.g. TARGET=/usr/jails/php74jail/usr/ports.php74/)" >&2; exit 1; }
+[ -d "$UPSTREAM/.git" ] || { echo "ERROR: $UPSTREAM is not a git clone" >&2; exit 1; }
+[ -d "$OVERLAY/.git" ]  || { echo "ERROR: $OVERLAY is not a git clone" >&2; exit 1; }
+[ "$TARGET" != "$UPSTREAM" ] || { echo "ERROR: TARGET must not be the upstream tree" >&2; exit 1; }
+mkdir -p "$TARGET"
 
 git -C "$UPSTREAM" fetch -q origin
 git -C "$UPSTREAM" checkout -q "$BRANCH"
@@ -44,33 +48,36 @@ if git -C "$OVERLAY" remote | grep -q .; then
     git -C "$OVERLAY" pull -q --ff-only
 fi
 
-# Drift-Check: hat Upstream Dateien geaendert, die wir ueberschreiben?
+# Drift check: did upstream change files that we override with a full copy?
 BASE=$(cat "$OVERLAY/UPSTREAM_BASE" 2>/dev/null || true)
 if [ -n "$BASE" ] && [ -f "$OVERLAY/OVERRIDES" ]; then
     while read -r f; do
         [ -z "$f" ] && continue
         if ! git -C "$UPSTREAM" diff --quiet "$BASE" HEAD -- "$f"; then
-            echo "WARNUNG: Upstream hat $f seit $BASE geaendert. Overlay-Kopie pruefen:"
+            echo "WARNING: upstream changed $f since $BASE. Check the overlay copy:"
             git -C "$UPSTREAM" diff --stat "$BASE" HEAD -- "$f"
         fi
     done < "$OVERLAY/OVERRIDES"
 fi
 
-# 1. Upstream spiegeln, 2. Overlay drueberlegen
+# 1. mirror upstream, 2. lay the overlay on top
 rsync -a --delete --exclude .git "$UPSTREAM/" "$TARGET/"
-rsync -a --exclude .git --exclude README.md --exclude sync-ports.sh \
+rsync -a --exclude .git --exclude README.md --exclude README.txt --exclude sync-ports.sh \
          --exclude UPSTREAM_BASE --exclude OVERRIDES --exclude patch-php-mk.sh --exclude profiles "$OVERLAY/" "$TARGET/"
 if [ -n "$PROFILE" ]; then
-    [ -d "$OVERLAY/profiles/$PROFILE" ] || { echo "FEHLER: Profil $PROFILE fehlt im Overlay" >&2; exit 1; }
-    rsync -a --exclude .git "$OVERLAY/profiles/$PROFILE/" "$TARGET/"
+    if [ -d "$OVERLAY/profiles/$PROFILE" ]; then
+        rsync -a --exclude .git "$OVERLAY/profiles/$PROFILE/" "$TARGET/"
+    else
+        echo "NOTE: no profiles/$PROFILE in the overlay; using the common part only."
+    fi
 fi
 
-# Nacharbeit: Das haben die Sunset-Commits (php56: ba09f7ee95ce, php74: 0d310d700aa0)
-# in Upstream-Dateien geaendert, die sich taeglich aendern (deshalb gefiltert statt als
-# Kopie im Overlay). SUNSETS: Portname-Teil:Datum der MOVED-Zeilen
+# Post-processing: what the sunset commits (php56: ba09f7ee95ce, php74: 0d310d700aa0)
+# changed in upstream files that change daily (hence filtered here instead of kept as a
+# copy in the overlay). SUNSETS: port-name part:date of the MOVED lines.
 SUNSETS=${SUNSETS:-"php56:2019-01-01 php74:2022-12-25"}
-#  a) MOVED: die Entfernungs-/Umzugszeilen dieser Ports streichen, sonst wuerden
-#     portmaster/portupgrade installierte Pakete "umziehen" bzw. als entfernt melden.
+#  a) MOVED: drop the removal/move lines of these ports, otherwise
+#     portmaster/portupgrade would "move" installed packages or report them as removed.
 tmp=$(mktemp)
 for sd in $SUNSETS; do
     name=${sd%%:*}; date=${sd##*:}
@@ -78,9 +85,9 @@ for sd in $SUNSETS; do
     cat "$tmp" > "$TARGET/MOVED"
 done
 rm -f "$tmp"
-#  b) Kategorie-Makefiles: SUBDIR-Eintraege aller Overlay-Ports (gemeinsam + Profil)
-#     einfuegen, falls Upstream sie nicht (mehr) hat. Noetig fuer make index/search;
-#     zum Bauen einzelner Ports nicht.
+#  b) Category Makefiles: add SUBDIR entries for all overlay ports (common + profile)
+#     if upstream no longer has them. Needed for make index/search; not needed to
+#     build individual ports.
 add_subdirs() {
     for d in "$1"/*/*/; do
         [ -f "${d}Makefile" ] || continue
@@ -94,15 +101,20 @@ add_subdirs() {
     done
 }
 add_subdirs "$OVERLAY"
-[ -n "$PROFILE" ] && add_subdirs "$OVERLAY/profiles/$PROFILE"
-#  c) Mk/Uses/php.mk: PHP 7.4 wieder zulassen (bricht ab, wenn Upstream umgebaut hat)
+if [ -n "$PROFILE" ] && [ -d "$OVERLAY/profiles/$PROFILE" ]; then
+    add_subdirs "$OVERLAY/profiles/$PROFILE"
+fi
+#  c) Mk/Uses/php.mk: re-enable PHP 7.4 / 5.6 (aborts if upstream restructured the file)
 sh "$OVERLAY/patch-php-mk.sh" "$TARGET/Mk/Uses/php.mk"
 
-echo "OK: $TARGET = $(git -C "$UPSTREAM" rev-parse --short HEAD) ($BRANCH) + Overlay $(git -C "$OVERLAY" rev-parse --short HEAD)"
-for v in 74 56; do [ -d "$TARGET/lang/php$v" ] && echo "php$v Version: $(make -C "$TARGET/lang/php$v" -V PORTVERSION 2>/dev/null || echo 'make -V fehlgeschlagen')"; done
+echo "OK: $TARGET = $(git -C "$UPSTREAM" rev-parse --short HEAD) ($BRANCH) + overlay $(git -C "$OVERLAY" rev-parse --short HEAD)"
+for v in 74 56; do
+    if [ -d "$TARGET/lang/php$v" ]; then
+        echo "php$v version: $(make -C "$TARGET/lang/php$v" -V PORTVERSION 2>/dev/null || echo 'make -V failed')"
+    fi
+done
 
 if [ "${1:-}" = "--accept" ]; then
     git -C "$UPSTREAM" rev-parse HEAD > "$OVERLAY/UPSTREAM_BASE"
-    echo "UPSTREAM_BASE aktualisiert, im Overlay-Repo committen."
+    echo "UPSTREAM_BASE updated, commit it in the overlay repo."
 fi
-

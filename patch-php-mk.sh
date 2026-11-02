@@ -1,19 +1,19 @@
 #!/bin/sh
-# patch-php-mk.sh DATEI - fuegt PHP 5.6 und 7.4 wieder in den aktuellen Upstream-Mk/Uses/php.mk ein.
-# Jede Aenderung wird geprueft; passt ein Anker nicht mehr -> Abbruch mit Meldung (Upstream hat umgebaut).
+# patch-php-mk.sh FILE - re-inserts PHP 5.6 and 7.4 into the current upstream Mk/Uses/php.mk.
+# Every change is verified; if an anchor no longer matches, abort with a message (upstream restructured the file).
 set -eu
-f=${1:?Aufruf: patch-php-mk.sh Mk/Uses/php.mk}
-die() { echo "FEHLER php.mk-Anpassung: $1 (Upstream php.mk umgebaut? Skript anpassen)" >&2; exit 1; }
-[ -f "$f" ] || die "$f fehlt"
-grep -q '[$][{]PHP_VER[}] == 74' "$f" && grep -q '[$][{]PHP_VER[}] == 56' "$f" && { echo "php.mk: 56 und 74 schon enthalten"; exit 0; }
+f=${1:?usage: patch-php-mk.sh Mk/Uses/php.mk}
+die() { echo "ERROR php.mk patch: $1 (upstream php.mk restructured? adapt this script)" >&2; exit 1; }
+[ -f "$f" ] || die "$f is missing"
+grep -q '[$][{]PHP_VER[}] == 74' "$f" && grep -q '[$][{]PHP_VER[}] == 56' "$f" && { echo "php.mk: 56 and 74 already present"; exit 0; }
 t=$(mktemp)
 
-# 1. 56 und 74 zu den erlaubten Versionen (erzeugt auch die Flavors php56/php74)
+# 1. add 56 and 74 to the allowed versions (this also creates the flavors php56/php74)
 sed -E 's/^(_ALL_PHP_VERSIONS=[[:space:]]*)/\156 74 /' "$f" > "$t"
 grep -q -E '^_ALL_PHP_VERSIONS=[[:space:]]*56 74 ' "$t" || die "_ALL_PHP_VERSIONS"
 cat "$t" > "$f"
 
-# 2. PHP_EXT_DIR/PHP_EXT_INC fuer 7.4 und 5.6 (erste Zweige der if/elif-Kette)
+# 2. PHP_EXT_DIR/PHP_EXT_INC for 7.4 and 5.6 (first branches of the if/elif chain)
 awk '
   prev ~ /bsd[.]default-versions[.]mk in sync/ && !done && $0 ~ /^[.][[:space:]]+if [$][{]PHP_VER[}] == [0-9]+[[:space:]]*$/ {
       ind = $0; sub(/if.*/, "", ind)
@@ -26,10 +26,10 @@ awk '
       sub(/if/, "elif"); done = 1
   }
   { print; prev = $0 }' "$f" > "$t"
-grep -q '^PHP_EXT_DIR=   20190902' "$t" && grep -q '^PHP_EXT_DIR=   20131226' "$t" && grep -q -E '^[.][[:space:]]+elif [$][{]PHP_VER[}] == [0-9]+' "$t" || die "PHP_EXT_DIR-Block"
+grep -q '^PHP_EXT_DIR=   20190902' "$t" && grep -q '^PHP_EXT_DIR=   20131226' "$t" && grep -q -E '^[.][[:space:]]+elif [$][{]PHP_VER[}] == [0-9]+' "$t" || die "PHP_EXT_DIR block"
 cat "$t" > "$f"
 
-# 3. erlaubte USE_PHP-Erweiterungen (random ab 8.2, ffi ab 7.4, sodium ab 7.2)
+# 3. allowed USE_PHP extensions (random from 8.2, ffi from 7.4, sodium from 7.2)
 awk '
   /^_USE_PHP_VER[0-9]+=/ && !done {
       print "_USE_PHP_VER56=\t${_USE_PHP_ALL:Nrandom:Nffi:Nsodium:Nzephir_parser} interbase mssql mysql opcache recode sybase_ct wddx"
@@ -39,7 +39,7 @@ awk '
 grep -q '^_USE_PHP_VER74=' "$t" && grep -q '^_USE_PHP_VER56=' "$t" || die "_USE_PHP_VER"
 cat "$t" > "$f"
 
-# 4. Erweiterungs-Abhaengigkeiten, die es in 7.4 als eigene Ports gibt
+# 4. extension dependencies that exist as separate ports in 5.6 / 7.4
 awk '
   /^[.][[:space:]]+for extension in [$][{]USE_PHP[}]/ && !done {
       print ".    if ${PHP_VER} == 74"
@@ -64,11 +64,11 @@ awk '
       done = 1
   }
   { print }' "$f" > "$t"
-grep -q '^json_DEPENDS=' "$t" || die "for extension-Schleife"
+grep -q '^json_DEPENDS=' "$t" || die "for extension loop"
 cat "$t" > "$f"
 rm -f "$t"
 
-# 5. Struktur-Check: gleich viele .if/.for wie .endif/.endfor
+# 5. structure check: same number of .if/.for as .endif/.endfor
 awk '/^[.][[:space:]]*(if|ifdef|ifndef|for)[[:space:]]/ {o++} /^[.][[:space:]]*(endif|endfor)/ {c++}
-     END { if (o != c) { print "if/endif unausgeglichen: " o " vs " c > "/dev/stderr"; exit 1 } }' "$f" || die "Struktur"
-echo "php.mk: PHP 5.6 und 7.4 eingefuegt"
+     END { if (o != c) { print "if/endif unbalanced: " o " vs " c > "/dev/stderr"; exit 1 } }' "$f" || die "structure"
+echo "php.mk: PHP 5.6 and 7.4 inserted"
